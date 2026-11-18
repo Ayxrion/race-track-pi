@@ -1,0 +1,8 @@
+# Local secrets: never commit
+src/wifi_config.h
+src/telemetry_config.h
+
+# Build output and save files
+build/
+data/
+*.bmp

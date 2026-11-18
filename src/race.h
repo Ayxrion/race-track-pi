@@ -1,0 +1,282 @@
+#pragma once
+// Race director: grid and start lights, lap counting, the chequered flag,
+// results, and the event ticker (lead changes, fastest laps, spins, passes).
+
+#include "cars.h"
+
+enum RacePhase : uint8_t { RP_GRID, RP_RACE, RP_FINISH, RP_RESULTS };
+static RacePhase phase = RP_GRID;
+static float phaseT = 0;
+static int   raceLaps = 10;              // 0 = endless
+static int   lightsOn = 0;
+static float goAt = 7.0f;
+static float fastestLap = 0;
+static int   fastestCar = -1;
+static int   finishCount = 0;
+static bool  nextRaceRequested = false;
+static int   spinCamCar = -1;            // for the TV camera
+static float seenLap[MAX_CARS];
+static int   prevTop[3] = { -1, -1, -1 };
+
+#define RESULTS_SECONDS 16.0f
+static float resultsSecs = RESULTS_SECONDS;   // longer with the championship standings to show
+static float scT = 0;                         // how long the safety car has been out
+static int   scLeadLap = -1;                  // the leader's lap when it pulled off (racing resumes at the line)
+static int   scOutLap = 0;                    // the leader's lap when it came out (it stays out for a lap at least)
+static char  gridMsg[2][56] = { "", "" };     // ticker lines while the cars sit on the grid (pole, the title race)
+// The last pit stop, for the TV caption (ui.h): who, when it ended (simTime), how long, with repairs.
+static int   pitCapCar = -1;
+static float pitCapT = -100, pitCapSecs = 0;
+static bool  pitCapRep = false;
+static uint8_t pitCapTyre = 0;                // 1 onto wets, 2 back onto slicks
+
+// A passing shower (Settings → Rain showers): on a dry day with the weather on Auto, about 1 race in 6
+// has one, from somewhere in the first half for a third of the race or so.
+#ifndef SHOWER_P
+#define SHOWER_P (1.0f / 6.0f)
+#endif
+static float showerFrom = -1, showerTo = -1;  // in the leader's laps
+static bool  showerStorm = false;
+
+// ─── Event ticker ─────────────────────────────────────────────────────────────
+static char     evMsg[56] = "";
+static uint32_t evUntil = 0;
+static float    lastEventT = -100;
+
+static void raceEvent(const char* m, float minGap = 3.0f, uint32_t ms = 3200) {
+  if (simTime - lastEventT < minGap) return;
+  lastEventT = simTime;
+  strncpy(evMsg, m, sizeof(evMsg) - 1); evMsg[sizeof(evMsg) - 1] = 0;
+  evUntil = millis() + ms;
+  Serial.printf("race: %s\n", m);
+}
+
+// ─── Race log over serial ─────────────────────────────────────────────────────
+// Machine-readable lines starting "RL " for studying races on a PC: the grid,
+// every pass, every incident, each car's lap times, the gaps each time the
+// leader completes a lap, and the result. Each line goes out in one write so the
+// two cores' output doesn't interleave mid-line.
+static int8_t gridSlot[MAX_CARS];
+static int    logPrevOrd[MAX_CARS];
+static int    logLeadLap = 0, logPasses = 0, logLeadChanges = 0, logInc = 0;
+
+static void logRaceStart() {
+  Serial.printf("RL START %s|%s cars %d laps %d\n", trk.name, SERIES_NAMES[raceSeries], numCars, raceLaps);
+  for (int k = 0; k < numCars; ++k) {
+    const Car& c = cars[order[k]];
+    gridSlot[order[k]] = k + 1; logPrevOrd[k] = order[k];
+    Serial.printf("RL GRID %d %s perf %.4f skill %.3f\n", k + 1, c.code, c.perf, c.skill);
+  }
+  logLeadLap = 0; logPasses = logLeadChanges = logInc = 0;
+}
+
+static void logRaceStep() {
+  for (int k = 0; k + 1 < numCars; ++k)
+    if (order[k] == logPrevOrd[k + 1] && order[k + 1] == logPrevOrd[k]) {
+      ++logPasses; if (k == 0) ++logLeadChanges;
+      Serial.printf("RL PASS %.1f %s %s P%d\n", raceTime, cars[order[k]].code, cars[order[k + 1]].code, k + 1);
+    }
+  memcpy(logPrevOrd, order, sizeof(int) * numCars);
+  const Car& L = cars[order[0]];
+  if (L.lap > logLeadLap && L.lap >= 1) {
+    logLeadLap = L.lap;
+    char b[16 + MAX_CARS * 12]; int n = snprintf(b, sizeof(b), "RL GAPS %d %.1f", L.lap, raceTime);
+    for (int k = 1; k < numCars && n < (int)sizeof(b) - 12; ++k) n += snprintf(b + n, sizeof(b) - n, " %s:%.1f", cars[order[k]].code, gapToLeader(order[k]));
+    Serial.printf("%s\n", b);
+  }
+}
+
+static void logRaceEnd() {
+  Serial.printf("RL END %.1f passes %d leadChanges %d incidents %d\n", raceTime, logPasses, logLeadChanges, logInc);
+  for (int k = 0; k < numCars; ++k) {
+    const Car& c = cars[order[k]];
+    const int inc = c.incidents[EV_SPIN] + c.incidents[EV_WALL] + c.incidents[EV_GRAVEL] + c.incidents[EV_CONTACT];
+    Serial.printf("RL RES %d %s grid %d best %.3f inc %d laps %d dmg %.2f%s\n", k + 1, c.code, gridSlot[order[k]], c.bestLap, inc, c.finished ? c.finishLaps : c.lap, c.dmg, c.out ? " OUT" : "");
+  }
+}
+
+static void fmtLapTime(char* out, size_t n, float t) {
+  int m = (int)(t / 60.0f);
+  float s = t - m * 60.0f;
+  if (m > 0) snprintf(out, n, "%d:%05.2f", m, s); else snprintf(out, n, "%.2f", s);
+}
+
+// ─── Race control ─────────────────────────────────────────────────────────────
+static void startRace(int nCars, uint8_t series, uint32_t seed) {
+  pitCapCar = -1; pitCapT = -100;
+  showerWx = -1; showerFrom = showerTo = -1;
+  wetAmt = wetTarget(effectiveWeather());     // the track as it is at the start (tyres are picked for it)
+  allowRetire = raceLaps > 0;                 // endless races: damage slows a car, but nobody is put out
+  simLaps = raceLaps;                         // for planning pit stops
+  setupCars(nCars, series, seed);
+  initEffects();
+  phase = RP_GRID; phaseT = 0; raceTime = 0; lightsOn = 0;
+  goAt = 6.2f + frandr(0.3f, 1.8f);
+  fastestLap = 0; fastestCar = -1; finishCount = 0;
+  nextRaceRequested = false; spinCamCar = -1; evN = 0;
+  for (int i = 0; i < MAX_CARS; ++i) seenLap[i] = 0;
+  prevTop[0] = prevTop[1] = prevTop[2] = -1;
+  evMsg[0] = 0;
+  scState = SC_NONE; scShow = false; scT = 0; scLeadLap = -1;
+  replayReset();
+  if (showersOn && raceLaps >= 3 && baseWeather() <= WEATHER_CLOUDY && frand() < SHOWER_P) {
+    showerFrom = raceLaps * frandr(0.15f, 0.55f);
+    showerTo = showerFrom + fmx(1.2f, raceLaps * frandr(0.12f, 0.40f));
+    showerStorm = frand() < 0.2f;
+    showerLevel = showerStorm ? 1.0f : frandr(0.35f, 1.0f);   // a light one leaves the slicks a chance
+  }
+}
+
+// The shower, if this race has one: it rains while the leader is between showerFrom and showerTo laps.
+static void updateShower() {
+  if (showerFrom < 0 || phase == RP_GRID) return;
+  const float prog = cars[order[0]].dist / trk.L;
+  const bool want = prog >= showerFrom && prog < showerTo && phase != RP_RESULTS;
+  if (want && showerWx < 0) {
+    showerWx = showerStorm ? WEATHER_STORMY : WEATHER_RAINY;
+    if (showerApplies()) { lastEventT = -100; raceEvent(showerStorm ? "STORM! Heavy rain is falling" : "RAIN! A shower is passing over", 0, 4000); }
+    Serial.printf("RL WX %.1f rain\n", raceTime);
+  } else if (!want && showerWx >= 0) {
+    showerWx = -1;
+    if (baseWeather() <= WEATHER_CLOUDY && phase == RP_RACE) { lastEventT = -100; raceEvent("The rain has stopped - the track is drying", 0, 4000); }
+    Serial.printf("RL WX %.1f dry\n", raceTime);
+  }
+}
+
+// The safety car: out after a retirement (unless the race is nearly over), in once the wreck is off the
+// road and the field has closed up behind it.
+static void updateSafetyCarCall(float dt) {
+  if (scState == SC_NONE) return;
+  scT += dt;
+  if (scState == SC_OUT) {
+    bool cleared = true, bunched = true;
+    const Car* prev = nullptr;
+    for (int k = 0; k < numCars; ++k) {
+      const Car& c = cars[order[k]];
+      if (c.out) { if (!c.parked) cleared = false; continue; }
+      if (c.pit >= 2) continue;
+      if (prev && prev->dist - c.dist < trk.L * 0.5f && (prev->dist - c.dist) / fmx(c.v, 40.0f) > 1.6f) bunched = false;
+      prev = &c;
+    }
+    if (cleared && cars[order[0]].lap > scOutLap && ((bunched && scT > 20.0f) || scT > 75.0f)) {
+      scState = SC_IN; lastEventT = -100; raceEvent("Safety car in this lap", 0, 3500);
+      Serial.printf("RL SC %.1f in\n", raceTime);
+    }
+  } else if (scState == SC_RESTART) {
+    if (scLeadLap < 0) scLeadLap = cars[order[0]].lap;
+    else if (cars[order[0]].lap > scLeadLap) {
+      scState = SC_NONE; scLeadLap = -1; lastEventT = -100; raceEvent("GREEN FLAG - RACING RESUMES!", 0, 3500);
+      Serial.printf("RL SC %.1f green\n", raceTime);
+    }
+  }
+}
+
+static void updateRace(float dt) {
+  phaseT += dt;
+  if (phase == RP_GRID) {
+    lightsOn = phaseT < 1.5f ? 0 : clampi((int)((phaseT - 1.5f) / 0.9f) + 1, 0, 5);
+    if (phaseT - dt < 0.4f && phaseT >= 0.4f && gridMsg[0][0]) raceEvent(gridMsg[0], 0, 2700);
+    if (phaseT - dt < 3.3f && phaseT >= 3.3f && gridMsg[1][0]) raceEvent(gridMsg[1], 0, 2700);
+    updateCars(dt, false, false);
+    if (phaseT >= goAt) { phase = RP_RACE; phaseT = 0; lightsOn = 0; raceEvent("LIGHTS OUT!", 0, 2200); logRaceStart(); }
+    updateOrder();
+    return;
+  }
+  raceTime += dt;
+  updateShower();
+  updateCars(dt, true, phase == RP_RESULTS);
+  if (phase == RP_RACE) replayRecord();                 // the last few seconds, for replays
+
+  // Chequered flag when the leader completes the last lap
+  if (phase == RP_RACE && raceLaps > 0 && cars[order[0]].lap >= raceLaps) {
+    phase = RP_FINISH; phaseT = 0;
+    for (int i = 0; i < numCars; ++i) cars[i].lapsAtFlag = cars[i].lap;
+    scState = SC_NONE; scShow = false;          // a finish under the safety car: it pulls off at the flag
+  }
+  if (phase == RP_FINISH || phase == RP_RESULTS) {
+    int outN = 0;
+    for (int k = 0; k < numCars; ++k) {
+      Car& c = cars[order[k]];
+      if (c.out) { ++outN; continue; }
+      if (c.finished) continue;
+      if (c.lap >= raceLaps || c.lap > c.lapsAtFlag) {
+        c.finished = true; c.finishPos = ++finishCount; c.finishLaps = c.lap;
+        if (c.finishPos == 1) { char b[48]; snprintf(b, sizeof(b), "CHEQUERED FLAG - %s WINS!", c.code); raceEvent(b, 0, 5000); }
+      }
+    }
+    if (phase == RP_FINISH && (finishCount + outN >= numCars || phaseT > 50)) { phase = RP_RESULTS; phaseT = 0; logRaceEnd(); }
+    if (phase == RP_RESULTS && phaseT > resultsSecs) nextRaceRequested = true;
+  }
+  updateOrder();
+
+  char b[56];
+  // Incidents (the camera goes to the worst one)
+  for (int e = 0; e < evN; ++e) {
+    const SimEvent& ev = evQ[e];
+    const Car& A = cars[ev.a];
+    if (phase == RP_RACE && ev.type <= EV_GRAVEL) { ++logInc; Serial.printf("RL INC %.1f %d %s %s\n", raceTime, (int)ev.type, A.code, ev.b >= 0 && ev.b < numCars ? cars[ev.b].code : "-"); }
+    if (phase == RP_RACE && ev.type == EV_OUT) Serial.printf("RL OUT %.1f %s lap %d\n", raceTime, A.code, A.lap);
+    switch (ev.type) {
+      case EV_SPIN:    snprintf(b, sizeof(b), "%s spins!", A.code); raceEvent(b, 1.0f); spinCamCar = ev.a; break;
+      case EV_WALL:    snprintf(b, sizeof(b), "%s hits the wall!", A.code); raceEvent(b, 0.5f); spinCamCar = ev.a; break;
+      case EV_CONTACT: snprintf(b, sizeof(b), "Contact! %s and %s", A.code, cars[ev.b].code); raceEvent(b, 1.0f); spinCamCar = ev.b;
+                       if (phase == RP_RACE && (A.pos <= 6 || cars[ev.b].pos <= 6)) { snprintf(b, sizeof(b), "contact with %s", A.code); replayRequest(ev.b, 1, raceTime, b); }
+                       break;
+      case EV_GRAVEL:  if (A.pos <= 6) { snprintf(b, sizeof(b), "%s runs into the gravel", A.code); raceEvent(b, 6.0f); } break;
+      case EV_PIT:     if (phase == RP_RACE) { Serial.printf("RL PIT %.1f %s lap %d P%d wear %.2f dmg %.2f\n", raceTime, A.code, A.lap, A.pos, A.wear, A.dmg);
+                         if (A.pos <= 6) { snprintf(b, sizeof(b), "%s pits from P%d", A.code, A.pos); raceEvent(b, 2.0f); } } break;
+      case EV_PITDONE: if (phase == RP_RACE) {
+                         pitCapCar = ev.a; pitCapT = simTime; pitCapSecs = A.pitStopT; pitCapRep = A.pitStopT > 3.1f; pitCapTyre = A.tyreChg;
+                         if (A.tyreChg) {
+                           Serial.printf("RL TYRE %.1f %s lap %d P%d %s wet %.2f\n", raceTime, A.code, A.lap, A.pos, A.wets ? "wets" : "slicks", wetAmt);
+                           if (A.pos <= 8) { snprintf(b, sizeof(b), A.wets ? "%s switches to wets" : (wetAmt > 0.3f ? "%s gambles on slicks!" : "%s is back on slicks"), A.code); raceEvent(b, 2.0f); }
+                         }
+                       } break;
+      case EV_DAMAGE:  snprintf(b, sizeof(b), "%s is damaged and losing time", A.code); raceEvent(b, 2.0f);
+                       if (phase == RP_RACE) replayRequest(ev.a, 2, raceTime, "a heavy hit"); break;
+      case EV_OUT:
+        spinCamCar = ev.a; lastEventT = -100;
+        if (phase == RP_RACE) replayRequest(ev.a, 3, raceTime, "out of the race");
+        if (phase == RP_RACE && scState == SC_NONE && raceLaps - cars[order[0]].lap >= 3 && raceTime > 12.0f) {
+          scDeploy(); scT = 0; scOutLap = cars[order[0]].lap;
+          snprintf(b, sizeof(b), "SAFETY CAR - %s is out of the race", A.code); raceEvent(b, 0, 5000);
+          Serial.printf("RL SC %.1f out\n", raceTime);
+        } else { snprintf(b, sizeof(b), "%s is out of the race!", A.code); raceEvent(b, 0, 4500); }
+        break;
+    }
+  }
+  evN = 0;
+  if (phase != RP_RACE) return;
+  updateSafetyCarCall(dt);
+  logRaceStep();
+  // Fastest laps
+  for (int i = 0; i < numCars; ++i) {
+    Car& c = cars[i];
+    if (c.lastLap == seenLap[i]) continue;
+    seenLap[i] = c.lastLap;
+    if (c.lastLap > 0) Serial.printf("RL LT %s %d %.3f P%d\n", c.code, c.lap, c.lastLap, c.pos);
+    if (c.lastLap > 0 && (fastestLap <= 0 || c.lastLap < fastestLap)) {
+      fastestLap = c.lastLap; fastestCar = i;
+      if (c.lap >= 2) { char t[16]; fmtLapTime(t, sizeof(t), c.lastLap); snprintf(b, sizeof(b), "Fastest lap: %s %s", c.code, t); raceEvent(b); }
+    }
+  }
+  // Lead changes and passes for the podium places
+  bool early = raceTime < 8.0f;          // the opening scramble
+  for (int k = 0; k < 3 && k < numCars; ++k) {
+    int now = order[k];
+    if (prevTop[k] >= 0 && now != prevTop[k] && !early && cars[prevTop[k]].pos > k + 1) {
+      if (k == 0) { snprintf(b, sizeof(b), "%s takes the lead!", cars[now].code); replayNoteLeader(now); }
+      else        snprintf(b, sizeof(b), "%s passes %s for P%d", cars[now].code, cars[prevTop[k]].code, k + 1);
+      raceEvent(b, 4.0f);
+    }
+    prevTop[k] = now;
+  }
+  replayCheckLeader(order[0]);
+}
+
+static int leaderLapDisplay() {
+  int l = cars[order[0]].lap + 1;
+  if (l < 1) l = 1;
+  if (raceLaps > 0 && l > raceLaps) l = raceLaps;
+  return l;
+}
