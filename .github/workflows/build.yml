@@ -54,6 +54,7 @@ jobs:
           cp build/race_track release/
           cp README.md release/
           cp -r docs release/
+          cp -r deploy release/
           tar -czf race-track-pi-linux-arm64.tar.gz -C release .
       - uses: actions/upload-artifact@v4
         with:

@@ -24,6 +24,10 @@ saved championships stay outside build artifacts. Keep the application's
 existing `data/` directory when replacing its executable. The ESP32's separate
 GitHub OTA releases remain unchanged.
 
+On the Pi desktop, `bash deploy/install-desktop-service.sh` starts the installed
+race now and at future desktop logins, including automatic login after reboot.
+Run it as the desktop user without sudo. See [setup](docs/WEBAPP.md).
+
 ## How it works
 
 `src/` holds the game, copied from `race-track` at f77bd27 (the v0.1.21 code)

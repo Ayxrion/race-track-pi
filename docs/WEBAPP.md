@@ -74,6 +74,22 @@ when building from source; clean release builds use simulated weather and UTC.
 
 ## 4. Verify
 
+To start automatically with the Raspberry Pi desktop, run this from the
+application directory as the desktop user (without sudo):
+
+```bash
+bash deploy/install-desktop-service.sh
+```
+
+The installer uses `build/race_track` for a source checkout, or `race_track`
+for an extracted release. It keeps the same working directory and key file,
+starts the app now, and installs an XDG desktop autostart entry plus a user
+systemd service. On the standard Pi OS desktop with automatic login, the race
+and feed return after reboot. A desktop session is required; this is not a
+headless service. Start/stop it with `systemctl --user start/stop
+race-track-live.service`. To disable future automatic starts, remove
+`~/.config/autostart/race-track-live.desktop`.
+
 Open [the Pi viewer](https://race.ayxie.com/?source=pi). The Pi tab should show
 its live circuit, car positions and timing tower; the ESP32 tab should still
 show the separate ESP32 race. `/health` reports both source states independently.
