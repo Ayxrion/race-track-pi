@@ -5,7 +5,7 @@
 // Requires TIMEZONE_OFFSET_HOURS (integer UTC offset) in wifi_config.h.
 
 #include <time.h>
-#include "wifi_config.h"
+#include "network_settings.h"
 
 #ifndef TIMEZONE_OFFSET_HOURS
 #define TIMEZONE_OFFSET_HOURS 0
