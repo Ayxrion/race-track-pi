@@ -185,6 +185,19 @@ static void applyBrightnessFromX(int x) {
   display.setBrightness(brightness);
 }
 
+// ─── Speed slider (temporary, PC/Pi: watch more races quicker) ───────────────
+// Bottom-left: sim steps per frame, 1x to 16x. Drag it with the mouse.
+static int simSpeed = 1;                     // (also RACE_TRACK_SPEED, and the "speed" command)
+static const int SPD_STEPS[] = { 1, 2, 3, 4, 6, 8, 12, 16 };
+#define SPD_N ((int)(sizeof(SPD_STEPS) / sizeof(SPD_STEPS[0])))
+static const Rect SPD_BOX = { 10, SCREEN_H - 34, 190, 26 };
+#define SPD_TX0 (SPD_BOX.x + 52)             // the track the knob runs along
+#define SPD_TX1 (SPD_BOX.x + SPD_BOX.w - 12)
+static void applySpeedFromX(int x) {
+  const float t = clampf((x - SPD_TX0) / (float)(SPD_TX1 - SPD_TX0), 0, 1);
+  simSpeed = SPD_STEPS[clampi((int)lroundf(t * (SPD_N - 1)), 0, SPD_N - 1)];
+}
+
 static inline int cyc(int v, int n) { return ((v % n) + n) % n; }
 
 static void cutToAutoCam();                    // defined with the TV camera
@@ -322,7 +335,7 @@ static void onTap(int x, int y) {
 }
 
 // ─── Touch state machine ──────────────────────────────────────────────────────
-enum TouchMode : uint8_t { TM_NONE, TM_PENDING, TM_PAN, TM_PINCH, TM_UI, TM_PANEL, TM_SLIDER };
+enum TouchMode : uint8_t { TM_NONE, TM_PENDING, TM_PAN, TM_PINCH, TM_UI, TM_PANEL, TM_SLIDER, TM_SPEED };
 
 struct TouchState {
   TouchMode mode = TM_NONE;
@@ -351,6 +364,7 @@ static void onDown(int x, int y) {
   }
   int id = hitTopButton(x, y);
   if (id != UI_NONE) { ts.mode = TM_UI; ts.uiId = id; return; }
+  if (SPD_BOX.hit(x, y)) { ts.mode = TM_SPEED; applySpeedFromX(x); return; }
   if (spectator) {                              // camera is locked to the TV feed
     ts.mode = TM_UI; ts.uiId = UI_NONE;
     if (millis() > toastUntil) toast("Spectator mode - tap the TV button to take over", 2200);
@@ -371,6 +385,7 @@ static void onMove(int x, int y) {
       cam.animZoom = false;
       break;
     case TM_SLIDER: applyBrightnessFromX(x); break;
+    case TM_SPEED:  applySpeedFromX(x); break;
     default: break;
   }
   ts.lx = x; ts.ly = y;
@@ -653,9 +668,9 @@ static int cameraCar() {
 // fit a 16-colour palette. If the 4-bit sprite can't be made (or its pixel
 // layout isn't what we expect), it falls back to a 16-bit sprite in PSRAM.
 enum : uint8_t { LBC_KEY = 0, LBC_WHITE, LBC_LIGHT, LBC_DIM, LBC_GAP, LBC_GOLD, LBC_ORANGE, LBC_PROTO, LBC_GT,
-                 LBC_FL, LBC_DMG, LBC_OUT, LBC_COUNT };
+                 LBC_FL, LBC_DMG, LBC_OUT, LBC_SOFT, LBC_COUNT };
 static const uint32_t LB_PAL[LBC_COUNT] = { 0x000000u, 0xFFFFFFu, 0xC8D0D8u, 0xA8B4BCu, 0xE0E4E8u, 0xF0C040u, 0xFFA040u,
-                                            0x60C0FFu, 0xFFB040u, 0xC890FFu, 0xFF5A48u, 0x6A7680u };
+                                            0x60C0FFu, 0xFFB040u, 0xC890FFu, 0xFF5A48u, 0x6A7680u, 0xF03838u };
 
 static LGFX_Sprite lbSpr(&display);
 static bool     lbOk = false, lbTried = false, lb4 = false, lbHiFirst = true;
@@ -759,7 +774,7 @@ static void rebuildLeaderboard() {
   else if (raceLaps > 0)                              snprintf(b, sizeof(b), "LAP %d/%d", leaderLapDisplay(), raceLaps);
   else                                                snprintf(b, sizeof(b), "LAP %d", leaderLapDisplay());
   lbText(b, 8, 12, LBC_WHITE, &fonts::DejaVu12, textdatum_t::middle_left);
-  lbText(scState != SC_NONE ? "SAFETY CAR" : SERIES_NAMES[raceSeries], LB_W - 7, 12, scState != SC_NONE ? LBC_ORANGE : LBC_GOLD, &fonts::DejaVu9, textdatum_t::middle_right);
+  lbText(scState != SC_NONE ? "SAFETY CAR" : raceSeries == SER_BIKES ? "Bikes" : SERIES_NAMES[raceSeries], LB_W - 7, 12, scState != SC_NONE ? LBC_ORANGE : LBC_GOLD, &fonts::DejaVu9, textdatum_t::middle_right);
   lbText(trk.name, 8, 27, LBC_DIM, &fonts::DejaVu9, textdatum_t::middle_left);
   lbN = numCars;
   for (int k = 0; k < numCars; ++k) {
@@ -770,9 +785,14 @@ static void rebuildLeaderboard() {
     snprintf(b, sizeof(b), "%d", k + 1);
     lbText(b, 18, yy, LBC_LIGHT, &fonts::DejaVu9, textdatum_t::middle_right);
     lbText(c.code, 29, yy, c.out ? LBC_OUT : (c.state == CS_SPIN || c.state == CS_STOPPED) ? LBC_ORANGE : LBC_WHITE, &fonts::DejaVu9, textdatum_t::middle_left);
-    if (!c.out && c.wets) lbSpr.fillRect(50, yy - 4, 3, 8, lb4 ? (uint32_t)LBC_PROTO : LB_PAL[LBC_PROTO]);      // on wets
-    if (!c.out && c.dmg >= DMG_SHOW) lbSpr.fillRect(54, yy - 4, 3, 8, lb4 ? (uint32_t)LBC_DMG : LB_PAL[LBC_DMG]);   // damaged
-    if (raceSeries == SER_ENDURANCE) lbText(c.cls == CC_PROTO ? "P" : "GT", 61, yy, c.cls == CC_PROTO ? LBC_PROTO : LBC_GT, &fonts::DejaVu9, textdatum_t::middle_left);
+    const bool showCmp = strategiesOn();   // (Pi) strategies: the compound it's on, as a coloured letter
+    if (!c.out && showCmp) {
+      static const uint8_t TC_COL[4] = { LBC_SOFT, LBC_GOLD, LBC_WHITE, LBC_PROTO };
+      const char t[2] = { TC_CH[c.tyre & 3], 0 };
+      lbText(t, 54, yy, TC_COL[c.tyre & 3], &fonts::DejaVu9, textdatum_t::middle_left);
+    } else if (!c.out && c.wets) lbSpr.fillRect(50, yy - 4, 3, 8, lb4 ? (uint32_t)LBC_PROTO : LB_PAL[LBC_PROTO]);      // on wets
+    const int dmgX = showCmp ? 62 : 54;
+    if (!c.out && c.dmg >= DMG_SHOW) lbSpr.fillRect(dmgX, yy - 4, 3, 8, lb4 ? (uint32_t)LBC_DMG : LB_PAL[LBC_DMG]);   // damaged
     if (phase == RP_GRID) b[0] = 0;
     else if (c.out) snprintf(b, sizeof(b), "OUT");
     else if (c.pit >= 2 && phase == RP_RACE) snprintf(b, sizeof(b), "PIT");
@@ -874,8 +894,9 @@ static void prepareLowerThird(int camC) {
     snprintf(l3.mid, sizeof(l3.mid), "%s", rpText);
   } else if (kind == L3_PIT) {
     snprintf(l3.head, sizeof(l3.head), "PIT STOP  -  P%d", A.pos);
-    const char* tyre = pitCapTyre == 1 ? "wets" : (pitCapTyre == 2 ? "slicks" : "new tyres");
-    if (pitCapRep) snprintf(l3.mid, sizeof(l3.mid), "%.1f s  %s + repairs", pitCapSecs, pitCapTyre ? tyre : "tyres");
+    const bool cmp = strategiesOn();   // (Pi) strategies: name the compound
+    const char* tyre = cmp ? TC_NAME[pitCapCmp & 3] : pitCapTyre == 1 ? "wets" : (pitCapTyre == 2 ? "slicks" : "new tyres");
+    if (pitCapRep) snprintf(l3.mid, sizeof(l3.mid), "%.1f s  %s + repairs", pitCapSecs, pitCapTyre || cmp ? tyre : "tyres");
     else snprintf(l3.mid, sizeof(l3.mid), "%.1f s  %s", pitCapSecs, tyre);
   } else if (kind == L3_BATTLE) {
     const Car& B = cars[kb];
@@ -884,7 +905,8 @@ static void prepareLowerThird(int camC) {
     snprintf(l3.mid, sizeof(l3.mid), "%.1f s", gapSecs(A, B));
   } else {
     const int lapNow = raceLaps > 0 ? clampi(A.lap + 1, 1, raceLaps) : clampi(A.lap + 1, 1, 9999);
-    const char* onWets = A.wets ? "  -  WETS" : "";
+    static const char* const TC_UP[4] = { "  -  SOFTS", "  -  MEDIUMS", "  -  HARDS", "  -  WETS" };
+    const char* onWets = strategiesOn() ? TC_UP[A.tyre & 3] : A.wets ? "  -  WETS" : "";   // (Pi: the compound)
     if (raceLaps > 0) snprintf(l3.head, sizeof(l3.head), "P%d  -  LAP %d / %d%s", A.pos, lapNow, raceLaps, onWets);
     else              snprintf(l3.head, sizeof(l3.head), "P%d  -  LAP %d%s", A.pos, lapNow, onWets);
     if (A.pit >= 2) snprintf(l3.mid, sizeof(l3.mid), "in the pits");
@@ -1441,8 +1463,22 @@ static void drawToast() {
   drawText(toastMsg, SCREEN_CX, y + 17, 0xF4F8F8u, &fonts::DejaVu12, textdatum_t::middle_center);
 }
 
+static void drawSpeedSlider() {
+  if (!stripHit(SPD_BOX.y, SPD_BOX.y + SPD_BOX.h)) return;
+  blendRoundRect(SPD_BOX.x, SPD_BOX.y, SPD_BOX.w, SPD_BOX.h, 10, 0x0A0E12u, 24);
+  char b[8]; snprintf(b, sizeof(b), "%dx", simSpeed);
+  drawText(b, SPD_BOX.x + 26, SPD_BOX.y + SPD_BOX.h / 2, simSpeed > 1 ? 0xFFC040u : 0xF4F8F8u, &fonts::DejaVu12, textdatum_t::middle_center);
+  const int sy = SPD_BOX.y + SPD_BOX.h / 2;
+  int k = 0; while (k < SPD_N - 1 && SPD_STEPS[k] < simSpeed) ++k;
+  const int knob = SPD_TX0 + (SPD_TX1 - SPD_TX0) * k / (SPD_N - 1);
+  canvas.fillRoundRect(SPD_TX0, sy - 2, SPD_TX1 - SPD_TX0, 4, 2, 0x3A4450u);
+  if (knob > SPD_TX0) canvas.fillRoundRect(SPD_TX0, sy - 2, knob - SPD_TX0, 4, 2, 0xE04A3Au);
+  fCircle(knob, sy, 7, 0xF4F8F8u);
+}
+
 // Mark the screen rows the UI changes this frame (see markDynamicRows in the .ino).
 static void uiDynamicRows(void (*mark)(int, int)) {
+  mark(SPD_BOX.y - 2, SPD_BOX.y + SPD_BOX.h + 2);   // the speed slider
   if (hudOn && lbDirty) mark(LB_Y, LB_Y + LB_SPR_H);
   if (phase == RP_GRID) mark(14, 54);
   if (resDirty) mark(RES_Y, RES_Y + RES_H);
@@ -1467,4 +1503,5 @@ static void drawUI() {
   UIP(5, drawTopButtons());
   UIP(6, drawPanel());
   UIP(7, drawToast());
+  drawSpeedSlider();
 }

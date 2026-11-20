@@ -138,17 +138,8 @@ static void champPrepareRace(int nCars, uint8_t series, int laps) {
   champRecorded = false; champShown = false;
   champFinal = champ.raceNo + 1 >= SEASON_RACES;
   rosterOn = true; rosterSeed = champ.seed;
-  rosterProtoMask = 0;
-  if (series == SER_ENDURANCE) {
-    // The drivers who've had the fewest prototypes this season get them (ties broken at random, per race).
-    int idx[MAX_CARS]; float key[MAX_CARS];
-    for (int i = 0; i < n; ++i) {
-      const ChampRow* r = champFind(rosterCode(i), false);
-      idx[i] = i; key[i] = (r ? r->protos : 0) + (hash32(champ.seed + champ.raceNo * 977u + i * 131u) & 1023) / 2048.0f;
-    }
-    std::sort(idx, idx + n, [&](int a, int b) { return key[a] < key[b]; });
-    for (int k = 0; k < (n + 2) / 3; ++k) rosterProtoMask |= 1u << idx[k];
-  }
+  rosterProtoMask = 0;   // (Pi: Endurance is prototypes only, so there's no sharing them out)
+  (void)series; (void)n;
   resultsSecs = champLive ? (champFinal ? 34.0f : 26.0f) : RESULTS_SECONDS;
 }
 
@@ -197,7 +188,6 @@ static void champRecordRace() {
       if (p == 1) ++r->wins;
       if (p <= 3) ++r->pods;
       if (!r->best || p < r->best) r->best = p;
-      if (raceSeries == SER_ENDURANCE && c.cls == CC_PROTO) ++r->protos;
     }
     rc->last = recs.raceCount; ++rc->starts;
     if (p == 1) { ++rc->wins; ++rc->streak; if (rc->streak > rc->bestStreak) rc->bestStreak = rc->streak; }

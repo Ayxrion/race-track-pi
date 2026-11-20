@@ -18,7 +18,8 @@
 #define MAX_STANDS    10
 #define MAX_LIGHTS    40
 #define KERB_W        3.0f
-#define TRACK_W_DEF   28.0f
+static float trackWDef = 42.0f;         // road width (px; the ESP32's is 28): room for one more car alongside. RT_TRACK_W to try others
+#define TRACK_W_DEF   trackWDef
 
 // Speed model, in world px and seconds. Laps take roughly 25–45 s.
 #define V_TOP   175.0f
@@ -464,24 +465,31 @@ static bool standOverlaps(float sc, float half, int side) {
   return false;
 }
 
-static void computePitsAndStands() {
-  const float hw = trk.hw;
-  trk.nStands = 0; trk.nLights = 0; trk.hasPits = false;
-  // Pit side: whichever side of the start straight has more room.
+// Where a pit lane fits: the straight stretch around the start line, on whichever side of it has more
+// room, as far as it stays straight with room for the lane. It fits if that's at least 150 px long.
+static bool pitLaneRoom(float hw, int& sd, float& a, float& b) {
   float c0 = 0, c1 = 0;
   for (float s = -40; s <= 40; s += trk.ds) { c0 += fmn(tp[idxAt(s)].clr[0], 300); c1 += fmn(tp[idxAt(s)].clr[1], 300); }
-  int sd = c1 >= c0 ? 1 : 0;
-  trk.pitSide = sd ? 1 : -1;
+  sd = c1 >= c0 ? 1 : 0;
   const float need = hw + 66.0f;
   auto straightAt = [&](float s) {
     float acc = 0; int cnt = 0;
     for (float u = -20; u <= 20; u += trk.ds) { acc += tp[idxAt(s + u)].k; ++cnt; }
     return fabsf(acc / cnt) < 1.0f / 500.0f && tp[idxAt(s)].clr[sd] > need;
   };
-  float a = 0, b = 0;
+  a = 0; b = 0;
   while (a > -180 && straightAt(a - trk.ds)) a -= trk.ds;
   while (b < 180 && straightAt(b + trk.ds)) b += trk.ds;
-  if (b - a >= 150) {
+  return b - a >= 150;
+}
+
+static void computePitsAndStands() {
+  const float hw = trk.hw;
+  trk.nStands = 0; trk.nLights = 0; trk.hasPits = false;
+  int sd; float a, b;
+  const bool fits = pitLaneRoom(hw, sd, a, b);
+  trk.pitSide = sd ? 1 : -1;
+  if (fits) {
     trk.hasPits = true; trk.pitS0 = a; trk.pitS1 = b;
     for (float s = a; s <= b; s += trk.ds) { TrackPt& p = tp[idxAt(s)]; p.bar[sd] = 0; p.kerb[sd] = 0; p.run[sd] = 0; }
     for (float s = a + 30; s <= b - 30; s += 60) addLight(s, trk.pitSide * (hw + 27));
@@ -683,9 +691,21 @@ static void buildRandomTrack(uint32_t seed) {
       fitControl(cx, cy, m, false);
       buildCenterline(cx, cy, m);
       computeFrames();
-      if (maxAbsK() < 1.0f / 15.0f && quickMinClear() > TRACK_W_DEF * 1.9f + 4) {
+      bool ok = maxAbsK() < 1.0f / 15.0f && quickMinClear() > TRACK_W_DEF * 1.9f + 4;
+      // (Pi: on a road wider than 30 px, a 15 px hairpin is tighter than half the road: its inside
+      // edge folds over itself and the racing line there is a near-zero radius, a crawl for
+      // everyone. Round them like the presets, then check the clearance again.)
+      if (ok && TRACK_W_DEF * 0.5f > 15.0f - RT_ROUND_M) {
+        roundTightCorners(1.0f / (TRACK_W_DEF * 0.5f + RT_ROUND_M));
+        ok = quickMinClear() > TRACK_W_DEF * 1.9f + 4;
+      }
+      if (ok) {
         computeClearance();
         rotateStart(findStartIndex());           // (rotation keeps every per-sample value)
+        // (Pi: every generated track gets a pit lane, so every race has pit strategies. A start straight
+        // without room for one also tends to mean a tight layout with nowhere to pass: try another.)
+        int pSide; float pa, pb;
+        if (attempt < 39 && !pitLaneRoom(TRACK_W_DEF * 0.5f, pSide, pa, pb)) break;
         trk.W = TRACK_W_DEF;
         trk.preset = -1; trk.seed = sd;
         snprintf(trk.name, sizeof(trk.name), "%s %s", RAND_NAME_A[sd % 16], RAND_NAME_B[(sd >> 8) % 6]);

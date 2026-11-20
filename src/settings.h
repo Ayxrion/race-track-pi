@@ -107,9 +107,10 @@ static void pickNextRace(int& sel, uint32_t& seed, uint8_t& series) {
   else                     sel = trackMode - 2;
   if (seriesSel == 0) {
     // Formula a little more often than the others
-    static const uint8_t AUTO_SERIES[] = { SER_FORMULA, SER_GT, SER_ENDURANCE, SER_FORMULA, SER_TOURING, SER_CLASSIC, SER_GT, SER_FORMULA, SER_VANS };
+    static const uint8_t AUTO_SERIES[] = { SER_FORMULA, SER_GT, SER_ENDURANCE, SER_FORMULA, SER_TOURING, SER_CLASSIC, SER_GT, SER_FORMULA, SER_VANS, SER_BIKES, SER_KARTS };
     series = AUTO_SERIES[hash32(rotIdx * 31 + 7) % sizeof(AUTO_SERIES)];
   } else {
     series = seriesSel - 1;
   }
+  if (const char* e = getenv("RT_SERIES")) series = (uint8_t)atoi(e);   // (Pi, tuning: every race in one series, 0 = Formula .. 5 = Vans)
 }

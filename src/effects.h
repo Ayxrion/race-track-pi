@@ -5,9 +5,9 @@
 #include "world.h"
 
 // ─── World-space particles ────────────────────────────────────────────────────
-enum PType : uint8_t { PT_DUST, PT_SMOKE, PT_SPRAY, PT_GRASS, PT_FLASH, PT_SPARK };
-struct Particle { float x, y, vx, vy, r, grow; uint8_t type, life, maxLife; bool active; };
-#define MAX_PARTS 180
+enum PType : uint8_t { PT_DUST, PT_SMOKE, PT_SPRAY, PT_GRASS, PT_FLASH, PT_SPARK, PT_DEBRIS };
+struct Particle { float x, y, vx, vy, r, grow; uint8_t type, life, maxLife; bool active; uint32_t col; };   // col: debris only
+#define MAX_PARTS 360
 // Both arrays live in PSRAM (~5 KB each, so they stay in cache): internal RAM
 // is tight, and the TLS library (weather) allocates its buffers there.
 static Particle* parts  = nullptr;
@@ -20,12 +20,12 @@ static PDraw* pd  = nullptr;
 static int    pdN = 0;
 static int partCursor = 0;
 
-static void spawnParticle(uint8_t type, float x, float y, float vx, float vy, float r, float grow, int life) {
+static void spawnParticle(uint8_t type, float x, float y, float vx, float vy, float r, float grow, int life, uint32_t col = 0) {
   for (int k = 0; k < MAX_PARTS; ++k) {
     Particle& p = parts[partCursor];
     partCursor = (partCursor + 1) % MAX_PARTS;
     if (!p.active || k == MAX_PARTS - 1) {
-      p = { x, y, vx, vy, r, grow, type, (uint8_t)life, (uint8_t)life, true };
+      p = { x, y, vx, vy, r, grow, type, (uint8_t)life, (uint8_t)life, true, col };
       return;
     }
   }
@@ -36,7 +36,8 @@ static void updateParticles() {
     Particle& p = parts[i];
     if (!p.active) continue;
     p.x += p.vx; p.y += p.vy;
-    p.vx *= 0.90f; p.vy *= 0.90f;
+    const float drag = p.type == PT_DEBRIS ? 0.84f : 0.90f;   // bits of bodywork skid to a stop
+    p.vx *= drag; p.vy *= drag;
     p.r += p.grow;
     if (p.life-- <= 1) p.active = false;
   }
@@ -62,6 +63,9 @@ static void snapshotParticles() {
       case PT_SPARK:
         q.solid = 1; q.r1 = (uint8_t)fmx(0, 0.6f * z); q.c1 = f > 0.5f ? 0xFFF0A0u : 0xFF9030u; q.a1 = 32;
         if (z > 1.2f) { q.r2 = (uint8_t)(2 * z); q.c2 = 0xFFB040u; q.a2 = 10; }
+        break;
+      case PT_DEBRIS:
+        q.solid = 1; q.r1 = (uint8_t)fmx(1.0f, p.r * z * 0.7f); q.c1 = litT(p.col); q.a1 = 32;
         break;
       case PT_FLASH:
         q.r1 = (uint8_t)fmx(1, 1.4f * z); q.c1 = 0xFFFFFFu; q.a1 = 28;

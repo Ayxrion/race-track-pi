@@ -58,10 +58,13 @@ static void replayRecord() {
   if (rpCount < REPLAY_FRAMES) ++rpCount;
 }
 
+static bool replaysOn = false;                  // (Pi: off for now; RT_REPLAYS=1 or the console's "replays on" turns them on)
+
 static void replayRequest(int car, int prio, float t, const char* text) {
-  if (rpPlaying || raceTime < 6.0f || t - rpLastT < (prio >= 2 ? REPLAY_GAP : REPLAY_GAP_LO) || (rpReqCar >= 0 && prio <= rpReqPrio)) return;
+  if (!replaysOn || rpPlaying || raceTime < 6.0f || t - rpLastT < (prio >= 2 ? REPLAY_GAP : REPLAY_GAP_LO) || (rpReqCar >= 0 && prio <= rpReqPrio)) return;
   rpReqCar = car; rpReqPrio = prio; rpReqT = t;
   snprintf(rpReqText, sizeof(rpReqText), "%s", text);
+  Serial.printf("RL REPLAY %.1f %s %s\n", t, cars[car].code, text);
 }
 
 // Frames by age: k = 0 the oldest.

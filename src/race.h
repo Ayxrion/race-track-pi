@@ -17,6 +17,8 @@ static bool  nextRaceRequested = false;
 static int   spinCamCar = -1;            // for the TV camera
 static float seenLap[MAX_CARS];
 static int   prevTop[3] = { -1, -1, -1 };
+static float pitSeenT[MAX_CARS];         // when each car was last in (or on the way to) the pits
+#define PIT_REPLAY_T  8.0f               // s: the leader losing out this soon after rejoining isn't a pass to replay
 
 #define RESULTS_SECONDS 16.0f
 static float resultsSecs = RESULTS_SECONDS;   // longer with the championship standings to show
@@ -29,6 +31,7 @@ static int   pitCapCar = -1;
 static float pitCapT = -100, pitCapSecs = 0;
 static bool  pitCapRep = false;
 static uint8_t pitCapTyre = 0;                // 1 onto wets, 2 back onto slicks
+static uint8_t pitCapCmp = 1;                 // (Pi) the compound fitted
 
 // A passing shower (Settings → Rain showers): on a dry day with the weather on Auto, about 1 race in 6
 // has one, from somewhere in the first half for a third of the race or so.
@@ -65,9 +68,10 @@ static void logRaceStart() {
   for (int k = 0; k < numCars; ++k) {
     const Car& c = cars[order[k]];
     gridSlot[order[k]] = k + 1; logPrevOrd[k] = order[k];
-    Serial.printf("RL GRID %d %s perf %.4f skill %.3f\n", k + 1, c.code, c.perf, c.skill);
+    Serial.printf("RL GRID %d %s perf %.4f skill %.3f strat %s\n", k + 1, c.code, c.perf, c.skill, stratName(c));
   }
   logLeadLap = 0; logPasses = logLeadChanges = logInc = 0;
+  memset(oppT, 0, sizeof(oppT)); memset(oppEnd, 0, sizeof(oppEnd)); oppStarts = 0;
 }
 
 static void logRaceStep() {
@@ -87,11 +91,14 @@ static void logRaceStep() {
 }
 
 static void logRaceEnd() {
-  Serial.printf("RL END %.1f passes %d leadChanges %d incidents %d\n", raceTime, logPasses, logLeadChanges, logInc);
+  float crawl = 0, blocked = 0; for (int k = 0; k < numCars; ++k) { crawl += cars[k].crawlT; blocked += cars[k].blockT; }
+  Serial.printf("RL END %.1f passes %d leadChanges %d incidents %d crawl %.1f blocked %.1f\n", raceTime, logPasses, logLeadChanges, logInc, crawl, blocked);
+  if (physDbg) Serial.printf("PH OPP sc %.0f cooldown %.0f noEdge %.0f theyBrake %.0f corner %.0f noRoom %.0f waited %.0f start %.0f inMove %.0f starts %d ends %d %d %d %d %d %d %d %d %d\n",
+                             oppT[0], oppT[1], oppT[2], oppT[3], oppT[4], oppT[5], oppT[6], oppT[7], oppT[8], oppStarts, oppEnd[0], oppEnd[1], oppEnd[2], oppEnd[3], oppEnd[4], oppEnd[5], oppEnd[6], oppEnd[7], oppEnd[8]);
   for (int k = 0; k < numCars; ++k) {
     const Car& c = cars[order[k]];
     const int inc = c.incidents[EV_SPIN] + c.incidents[EV_WALL] + c.incidents[EV_GRAVEL] + c.incidents[EV_CONTACT];
-    Serial.printf("RL RES %d %s grid %d best %.3f inc %d laps %d dmg %.2f%s\n", k + 1, c.code, gridSlot[order[k]], c.bestLap, inc, c.finished ? c.finishLaps : c.lap, c.dmg, c.out ? " OUT" : "");
+    Serial.printf("RL RES %d %s grid %d best %.3f inc %d laps %d dmg %.2f strat %s stops %d%s\n", k + 1, c.code, gridSlot[order[k]], c.bestLap, inc, c.finished ? c.finishLaps : c.lap, c.dmg, stratName(c), c.pitDone, c.out ? " OUT" : "");
   }
 }
 
@@ -114,7 +121,7 @@ static void startRace(int nCars, uint8_t series, uint32_t seed) {
   goAt = 6.2f + frandr(0.3f, 1.8f);
   fastestLap = 0; fastestCar = -1; finishCount = 0;
   nextRaceRequested = false; spinCamCar = -1; evN = 0;
-  for (int i = 0; i < MAX_CARS; ++i) seenLap[i] = 0;
+  for (int i = 0; i < MAX_CARS; ++i) { seenLap[i] = 0; pitSeenT[i] = -100; }
   prevTop[0] = prevTop[1] = prevTop[2] = -1;
   evMsg[0] = 0;
   scState = SC_NONE; scShow = false; scT = 0; scLeadLap = -1;
@@ -226,7 +233,8 @@ static void updateRace(float dt) {
       case EV_PIT:     if (phase == RP_RACE) { Serial.printf("RL PIT %.1f %s lap %d P%d wear %.2f dmg %.2f\n", raceTime, A.code, A.lap, A.pos, A.wear, A.dmg);
                          if (A.pos <= 6) { snprintf(b, sizeof(b), "%s pits from P%d", A.code, A.pos); raceEvent(b, 2.0f); } } break;
       case EV_PITDONE: if (phase == RP_RACE) {
-                         pitCapCar = ev.a; pitCapT = simTime; pitCapSecs = A.pitStopT; pitCapRep = A.pitStopT > 3.1f; pitCapTyre = A.tyreChg;
+                         pitCapCar = ev.a; pitCapT = simTime; pitCapSecs = A.pitStopT; pitCapRep = A.pitStopT > 3.1f; pitCapTyre = A.tyreChg; pitCapCmp = A.tyre;
+                         Serial.printf("RL STOP %.1f %s lap %d P%d %c next %d stop %.1f\n", raceTime, A.code, A.lap, A.pos, TC_CH[A.tyre & 3], A.pitLap, A.pitStopT);
                          if (A.tyreChg) {
                            Serial.printf("RL TYRE %.1f %s lap %d P%d %s wet %.2f\n", raceTime, A.code, A.lap, A.pos, A.wets ? "wets" : "slicks", wetAmt);
                            if (A.pos <= 8) { snprintf(b, sizeof(b), A.wets ? "%s switches to wets" : (wetAmt > 0.3f ? "%s gambles on slicks!" : "%s is back on slicks"), A.code); raceEvent(b, 2.0f); }
@@ -254,7 +262,7 @@ static void updateRace(float dt) {
     Car& c = cars[i];
     if (c.lastLap == seenLap[i]) continue;
     seenLap[i] = c.lastLap;
-    if (c.lastLap > 0) Serial.printf("RL LT %s %d %.3f P%d\n", c.code, c.lap, c.lastLap, c.pos);
+    if (c.lastLap > 0) Serial.printf("RL LT %s %d %.3f P%d %c %.2f %.4f\n", c.code, c.lap, c.lastLap, c.pos, TC_CH[c.tyre & 3], c.wear, compoundGrip(c));
     if (c.lastLap > 0 && (fastestLap <= 0 || c.lastLap < fastestLap)) {
       fastestLap = c.lastLap; fastestCar = i;
       if (c.lap >= 2) { char t[16]; fmtLapTime(t, sizeof(t), c.lastLap); snprintf(b, sizeof(b), "Fastest lap: %s %s", c.code, t); raceEvent(b); }
@@ -262,10 +270,15 @@ static void updateRace(float dt) {
   }
   // Lead changes and passes for the podium places
   bool early = raceTime < 8.0f;          // the opening scramble
+  for (int i = 0; i < numCars; ++i) if (cars[i].pit) pitSeenT[i] = raceTime;
   for (int k = 0; k < 3 && k < numCars; ++k) {
     int now = order[k];
     if (prevTop[k] >= 0 && now != prevTop[k] && !early && cars[prevTop[k]].pos > k + 1) {
-      if (k == 0) { snprintf(b, sizeof(b), "%s takes the lead!", cars[now].code); replayNoteLeader(now); }
+      if (k == 0) {
+        snprintf(b, sizeof(b), "%s takes the lead!", cars[now].code);
+        Serial.printf("RL LEAD %.1f %s %s pit %.1f\n", raceTime, cars[now].code, cars[prevTop[k]].code, raceTime - pitSeenT[prevTop[k]]);
+        if (raceTime - pitSeenT[prevTop[k]] > PIT_REPLAY_T) replayNoteLeader(now);   // the leader pitting isn't a pass worth replaying
+      }
       else        snprintf(b, sizeof(b), "%s passes %s for P%d", cars[now].code, cars[prevTop[k]].code, k + 1);
       raceEvent(b, 4.0f);
     }

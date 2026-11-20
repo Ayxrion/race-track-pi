@@ -124,6 +124,11 @@ static void handleSerialCmd(char* s) {
   if (!strcmp(tok[0], "finale")) { testLaps = clampi(a1, 0, 99); champTestFinale(carSetting); nextRaceRequested = true; }
   else if (!strcmp(tok[0], "next")) { testLaps = clampi(a1, 0, 99); nextRaceRequested = true; Serial.println("Test: next race"); }
   else if (!strcmp(tok[0], "shot")) saveScreenshot();
+  else if (!strcmp(tok[0], "physics")) {
+    if (nt > 1) physOn = a1 != 0;
+    Serial.printf("Physics: %s\n", physOn ? "rigid-body contact" : "the ESP32's scripted contact");
+  }
+  else if (!strcmp(tok[0], "speed")) { simSpeed = clampi(nt > 1 ? a1 : 1, 1, 16); Serial.printf("Speed: %dx\n", simSpeed); }
   else if (!strcmp(tok[0], "telemetry")) {
     if (nt > 1 && !strcmp(tok[1], "off")) telemetryForget();
     else Serial.printf("Telemetry: %s\n", telemetryReady ? "publishing" : "off");
@@ -140,6 +145,11 @@ static void handleSerialCmd(char* s) {
     rpLastT = -100; replayRequest(order[0], 9, raceTime - 1.0f, "test replay");
     Serial.printf("Test: replay requested (%s)\n", rpReqCar >= 0 ? "ok" : "not now");
   }
+  else if (!strcmp(tok[0], "replays")) {
+    replaysOn = !(nt > 1 && !strcmp(tok[1], "off"));
+    if (!replaysOn) rpReqCar = -1;
+    Serial.printf("Replays %s\n", replaysOn ? "on" : "off");
+  }
   else if (!strcmp(tok[0], "newseason")) {
     testLaps = clampi(a1, 0, 99); champTest = true; champTestRan = false; champ.raceNo = SEASON_RACES; nextRaceRequested = true;
     Serial.println("Test: the next race starts a new season (nothing will be saved)");
@@ -154,7 +164,7 @@ static void handleSerialCmd(char* s) {
     }
     Serial.printf("Test: panel %s page %d\n", panelOpen ? "open" : "closed", panelPage);
   }
-  else Serial.printf("Commands: finale [laps], next [laps], shot, panel <page> [slot] [colours], shower [in] [laps] [wet], newseason [laps], replay (got '%s')\n", tok[0]);
+  else Serial.printf("Commands: finale [laps], next [laps], shot, physics [0|1], speed [1-16], panel <page> [slot] [colours], shower [in] [laps] [wet], newseason [laps], replay (got '%s')\n", tok[0]);
 }
 static void pollSerialCmd() {
   static char buf[40]; static int n = 0;
@@ -174,6 +184,7 @@ static void beginNextRace() {
   Serial.printf("World generated in %lu ms\n", (unsigned long)(millis() - t0));
   raceLaps = LAPS_OPTS[lapsIdx];
   if (testLaps > 0) { raceLaps = testLaps; testLaps = 0; }
+  if (const char* e = getenv("RT_LAPS")) raceLaps = atoi(e);            // (tuning: race length for test runs)
   champPrepareRace(carSetting, series, raceLaps);
   startRace(carSetting, series, seed);
   champGridTicker();
@@ -221,12 +232,56 @@ static void simStart(int steps) { if (steps <= 0) return; simSteps = steps; simB
 void setup() {
   _rng = esp_random() | 1u;
   Serial.printf("Race Track v%s (%s edition)\n", FIRMWARE_VERSION, PLATFORM_NAME);
+  if (const char* e = getenv("RACE_TRACK_PHYSICS")) { physOn = atoi(e) != 0; physDbg = atoi(e) == 2; }
+  if (const char* e = getenv("RACE_TRACK_SPEED")) simSpeed = clampi(atoi(e), 1, 16);
+  if (const char* e = getenv("RT_FOLLOW_T")) followT = atof(e);       // tuning
+  if (const char* e = getenv("RT_PASS_BAND")) passBand = atof(e);
+  if (const char* e = getenv("RT_PASS_SWITCH")) passSwitch = atoi(e) != 0;
+  if (const char* e = getenv("RT_REPLAYS")) replaysOn = atoi(e) != 0;  // 0: no replays
+  if (const char* e = getenv("RT_OBST_FIX")) obstFix = atoi(e);
+  if (const char* e = getenv("RT_PACK_FAR")) sscanf(e, "%f:%f", &packFarK, &packFarG);   // tuning: far catch-up "k:g"
+  if (const char* e = getenv("RT_PACK")) sscanf(e, "%f:%f", &packKPh, &packGripK);
+  if (const char* e = getenv("RT_REPAIR")) sscanf(e, "%f:%f", &repairLo, &repairHi);
+  if (const char* e = getenv("RT_LAP1")) sscanf(e, "%f:%f", &lap1K, &lap1Laps);
+  if (const char* e = getenv("RT_STRAT")) { const int v = atoi(e); tyreStrat = v != 0; forceStrat = v >= 2 ? v - 2 : -1; }   // tuning: 0 old tyres, 1 strategies, 2+k everyone on STRATS[k]
+  if (const char* e = getenv("RT_TYRE")) sscanf(e, "%f:%f:%f", &tcGrip[0], &tcGrip[2], &twLin);
+  if (const char* e = getenv("RT_LANE_MAX")) laneMax = atof(e);
+  if (const char* e = getenv("RT_LANE_REFV")) laneRefV = atof(e);
+  if (const char* e = getenv("RT_F_LEN")) CLS[CC_FORMULA].len = atof(e);
+  if (const char* e = getenv("RT_F_TOP")) CLS[CC_FORMULA].top = atof(e);
+  if (const char* e = getenv("RT_F_GRIP")) CLS[CC_FORMULA].grip = atof(e);
+  if (const char* e = getenv("RT_F_ACC")) CLS[CC_FORMULA].acc = atof(e);
+  if (const char* e = getenv("RT_CLS_GRIP")) { int k; float g; if (sscanf(e, "%d:%f", &k, &g) == 2 && k >= 0 && k < CC_COUNT) CLS[k].grip = g; }   // tuning: "4:0.76"
+  if (const char* e = getenv("RT_CLS_WID")) { int k; float w; if (sscanf(e, "%d:%f", &k, &w) == 2 && k >= 0 && k < CC_COUNT) CLS[k].wid = w; }
+  if (const char* e = getenv("RT_F_LIKE")) { const int k = atoi(e); CLS[CC_FORMULA].top = CLS[k].top; CLS[CC_FORMULA].grip = CLS[k].grip; CLS[CC_FORMULA].acc = CLS[k].acc; }
+  if (const char* e = getenv("RT_TRACK_W")) trackWDef = atof(e);
+  if (getenv("RT_TRACK_SURVEY")) {                   // tuning: how wide each circuit can be, and how often a generated one fits
+    allocWorld();
+    // (and per class, the share of each lap flat out, where the tow works)
+    auto flatShare = [](const char* nm) {
+      char b[200]; int n = snprintf(b, sizeof(b), "FLAT %-24s", nm);
+      for (int k = 0; k < CC_COUNT; ++k) {
+        int f = 0; const float need = V_TOP * CLS[k].top * FLAT_OUT / sqrtf(CLS[k].grip);
+        for (int i = 0; i < trk.n; ++i) f += tp[i].vc >= need;
+        n += snprintf(b + n, sizeof(b) - n, " %s %.0f%%", CLS[k].name, 100.0f * f / trk.n);
+      }
+      Serial.printf("%s\n", b);
+    };
+    for (int p = 0; p < NUM_PRESETS; ++p) { buildPresetTrack(p); flatShare(trk.name); }
+    for (uint32_t s = 1; s <= 6; ++s) { buildRandomTrack(s * 7919u); flatShare(trk.name); }
+    int fit = 0;
+    for (uint32_t s = 1; s <= 30; ++s) { buildRandomTrack(s * 7919u); if (trk.preset < 0) ++fit; }
+    Serial.printf("SURVEY width %.0f: %d of 30 generated tracks fit\n", trackWDef, fit);
+    fflush(stdout); exit(0);
+  }
+  Serial.printf("Physics: %s\n", physOn ? "rigid-body contact" : "the ESP32's scripted contact");
   Serial.printf("Saves in %s/\n", rtDataDir());
 
   display.init();
   display.setRotation(0);
   display.setBrightness(200);
   loadSettings();
+  if (const char* e = getenv("RT_TRACKMODE")) trackMode = (uint8_t)atoi(e);   // (tuning: 1 = generated tracks only)
   champLoad();
   display.setBrightness(brightness);
 
@@ -292,6 +347,7 @@ void loop() {
     updateWeatherFx();
   }
   if ((int32_t)(now - simMs) >= FRAME_MS) simMs = now;
+  steps *= simSpeed;                                 // fast-forward (testing)
   updateLighting();
   telemetryCapture();
 
