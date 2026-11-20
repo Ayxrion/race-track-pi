@@ -74,18 +74,26 @@ jobs:
           update: true
           install: >-
             git zip mingw-w64-i686-gcc mingw-w64-i686-cmake
-            mingw-w64-i686-ninja mingw-w64-i686-SDL2 mingw-w64-i686-curl
+            mingw-w64-i686-ninja mingw-w64-i686-curl
+      - name: Install pinned SDL2 development package
+        run: |
+          mkdir -p deps
+          curl -fL https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-mingw.tar.gz -o deps/SDL2.tar.gz
+          echo '83a5d74012311edc3c0d40ea6faecbe57ad692aa033fa5dc273cc937e3938ff2  deps/SDL2.tar.gz' | sha256sum -c -
+          tar -xzf deps/SDL2.tar.gz -C deps
       - name: Configure
         run: |
           VERSION="0.1.1-dev.${GITHUB_SHA:0:7}"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRACE_TRACK_VERSION="$VERSION"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRACE_TRACK_VERSION="$VERSION" -DSDL2_DIR="$PWD/deps/SDL2-2.32.10/i686-w64-mingw32/lib/cmake/SDL2"
       - run: cmake --build build -j 4
       - run: ctest --test-dir build --output-on-failure
       - name: Package Windows application
         run: |
           mkdir -p release
           cp build/race_track.exe release/
+          cp deps/SDL2-2.32.10/i686-w64-mingw32/bin/SDL2.dll release/
+          export PATH="$PWD/release:$PATH"
           # Bundle the transitive MinGW DLLs used by this executable.
           ldd build/race_track.exe | awk '/\/mingw32\/bin\// { print $3 }' | while read -r dll; do cp "$dll" release/; done
           cp README.md release/
