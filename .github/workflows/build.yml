@@ -48,6 +48,8 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRACE_TRACK_VERSION="$VERSION"
       - run: cmake --build build -j 4
       - run: ctest --test-dir build --output-on-failure
+      - name: Validate desktop startup service
+        run: bash tests/desktop-service.sh
       - name: Package Pi application
         run: |
           mkdir -p release

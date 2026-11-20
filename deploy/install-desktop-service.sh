@@ -27,7 +27,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=$(unit_path "$app_dir")
+WorkingDirectory=${app_dir//%/%%}
 ExecStart=$(unit_path "$binary")
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=%h/.Xauthority
