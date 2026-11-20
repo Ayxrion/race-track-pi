@@ -4,5 +4,9 @@ src/telemetry_config.h
 
 # Build output and save files
 build/
+build-*/
 data/
 *.bmp
+.local/
+.env
+*-publish-token.txt

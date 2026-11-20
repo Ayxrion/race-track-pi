@@ -3,6 +3,7 @@ project(RaceTrackPi C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(RACE_TRACK_VERSION "0.1.1-dev" CACHE STRING "Version shown by the Pi application")
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -52,6 +53,7 @@ target_compile_options(lgfx_sdl PRIVATE -w)
 add_executable(race_track src/main.cpp platform/platform.cpp)
 target_include_directories(race_track PRIVATE src platform ${ARDUINOJSON_DIR}/src)
 target_compile_definitions(race_track PRIVATE
+  FIRMWARE_VERSION="${RACE_TRACK_VERSION}"
   RT_PC=1
   ARDUINOJSON_ENABLE_ARDUINO_STRING=1
   ARDUINOJSON_ENABLE_ARDUINO_STREAM=0
@@ -62,3 +64,10 @@ if(WIN32)
 endif()
 target_compile_options(race_track PRIVATE -Wall -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-misleading-indentation -Wno-enum-compare)
 target_link_libraries(race_track PRIVATE lgfx_sdl CURL::libcurl Threads::Threads)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(telemetry_settings_test tests/telemetry_settings_test.cpp)
+  target_include_directories(telemetry_settings_test PRIVATE platform)
+  add_test(NAME telemetry_settings COMMAND telemetry_settings_test)
+endif()

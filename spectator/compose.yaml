@@ -1,0 +1,30 @@
+services:
+  race:
+    build: .
+    restart: unless-stopped
+    environment:
+      RACE_PUBLISH_TOKEN: ${RACE_PUBLISH_TOKEN:?Set a random publishing token in .env}
+      RACE_PI_PUBLISH_TOKEN: ${RACE_PI_PUBLISH_TOKEN:-}
+    expose:
+      - "8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - race
+volumes:
+  caddy_data:
+  caddy_config:

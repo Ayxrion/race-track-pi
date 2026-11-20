@@ -4,9 +4,25 @@ The Race Track simulation from the CrowPanel ESP32 project, running on a
 Raspberry Pi (or in a window on a Windows/Linux PC for development). It is a
 separate project: the ESP32 build and its OTA releases are not affected.
 
-This is the starting point for the bigger version: real vehicle physics with
-hard-hitting contact, which the Pi has the headroom for. Right now it is the
-same race as the ESP32's v0.1.21/v0.1.24 code.
+The Pi edition adds rigid-body collisions, tyre/pit strategies, motorcycles
+and go-karts. A shared 3D webapp can watch the Pi and ESP32 races independently.
+See [enable the live webapp](docs/WEBAPP.md).
+
+## GitHub builds and updates
+
+Every push to `main` builds and tests the Pi app, Windows app and spectator.
+Version tags (`v0.1.1`, etc.) publish all three as a
+[GitHub release](https://github.com/Ayxrion/race-track-pi/releases), with checksums:
+
+- `race-track-pi-linux-arm64.tar.gz`: 64-bit Raspberry Pi OS desktop,
+  Bookworm or newer; requires SDL2, libcurl and CA certificates.
+- `race-track-pi-windows-x86.zip`: Windows development app with runtime DLLs.
+- `race-track-spectator.tar.gz`: compiled webapp and relay for the existing VM.
+
+The application version comes from the tag. Configuration, publishing keys and
+saved championships stay outside build artifacts. Keep the application's
+existing `data/` directory when replacing its executable. The ESP32's separate
+GitHub OTA releases remain unchanged.
 
 ## How it works
 
@@ -55,19 +71,20 @@ CMake downloads LovyanGFX 1.2.21 and ArduinoJson 6.21.6 the first time (or use
 
 - `src/wifi_config.h`: copy `wifi_config.h.template`. Only the weather key,
   location and time zone are used (the operating system handles Wi-Fi and the clock).
-- `src/telemetry_config.h`: leave this out for now. With the same relay and
-  token as the ESP32, both would publish into one feed. The relay needs to
-  tell sources apart before the website can show both.
+- `data/pi-publish-token.txt`: runtime Pi publishing key, separate from the
+  ESP32 key. No rebuild needed. The default relay URL is
+  `https://race.ayxie.com/api/publish/pi`; see [setup](docs/WEBAPP.md).
+- Public builds work without `wifi_config.h`; simulated weather is available,
+  with UTC for day/night. Source builds can retain their local weather settings.
 
 ## Console commands
 
 The ESP32's serial test commands work in the terminal: `next [laps]`,
 `finale [laps]`, `newseason [laps]`, `shower [in] [laps] [wet]`, `replay`,
-`panel <page>`, `telemetry [off]`, and `shot` (saves `data/shot_<n>.bmp`).
+`panel <page>`, `telemetry [on|off]`, and `shot` (saves `data/shot_<n>.bmp`).
 
 ## Still to do
 
 - Full screen on the Pi and the Pi's display resolution (it draws 800×480 today).
 - Mouse wheel zoom (pinch needs a touch screen).
-- A source name in the telemetry feed, so the website can show the ESP32 and the Pi.
-- The physics rewrite: cars as rigid bodies with impulse-based contact and damage.
+- Extend web telemetry with detailed motorcycle lean and physics debris.

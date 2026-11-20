@@ -1,0 +1,4 @@
+race.ayxie.com {
+    encode zstd gzip
+    reverse_proxy race:8787
+}

@@ -1,15 +1,10 @@
 #pragma once
 // Read-only internet telemetry for the 3D companion (a separate web viewer).
-// Compiled into every build, but idle unless the relay URL and publishing token
-// are stored in NVS. Release binaries are public, so they never contain the
-// token: a local telemetry_config.h (gitignored) seeds NVS on a USB-flashed
-// build, and the stored values then survive OTA updates. `telemetry off` on
-// the serial port clears them.
+// Compiled into every build, but idle unless a runtime Pi publishing key exists.
+// See docs/WEBAPP.md. Public release binaries never contain credentials.
 // Called only on core 1 with the simulation idle. Network I/O owns copies and
 // never reads cars[], tp[], trk, or any other mutable simulation state.
-#if __has_include("telemetry_config.h")
-#include "telemetry_config.h"
-#endif
+#include <telemetry_settings.h>
 #include <stdarg.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -25,28 +20,22 @@
 static char telemetryUrl[128]={};
 static char telemetryToken[96]={};
 
-static bool telemetryValid(const char* url,const char* token) {
-  return !strncmp(url,"https://",8)&&strlen(url)<sizeof(telemetryUrl)&&strlen(token)>=32&&strlen(token)<sizeof(telemetryToken);
-}
-
-// Loads the relay settings, seeding NVS from a local telemetry_config.h if present.
 static bool telemetryLoadConfig() {
-  Preferences p;p.begin(RT_TELEMETRY_NS,false);
-#if defined(RT_TELEMETRY_ENABLED) && RT_TELEMETRY_ENABLED && defined(RT_TELEMETRY_URL) && defined(RT_TELEMETRY_TOKEN)
-  if(telemetryValid(RT_TELEMETRY_URL,RT_TELEMETRY_TOKEN)&&(p.getString("url")!=RT_TELEMETRY_URL||p.getString("token")!=RT_TELEMETRY_TOKEN)){
-    p.putString("url",RT_TELEMETRY_URL);p.putString("token",RT_TELEMETRY_TOKEN);
-    Serial.println("Telemetry: relay settings saved from telemetry_config.h");
-  }
-#endif
-  if(p.isKey("url"))p.getString("url",telemetryUrl,sizeof(telemetryUrl));
-  if(p.isKey("token"))p.getString("token",telemetryToken,sizeof(telemetryToken));
+  Preferences p;p.begin(RT_TELEMETRY_NS,true);
+  const bool disabled=p.getBool("disabled",false);
   p.end();
-  return telemetryValid(telemetryUrl,telemetryToken);
+  if(disabled){Serial.println("Telemetry: disabled; use telemetry on and restart to enable");return false;}
+  const auto config=rtTelemetry::load(rtDataDir());
+  if(config.error){Serial.printf("Telemetry: %s\n",config.error);return false;}
+  if(!config.enabled())return false;
+  memcpy(telemetryUrl,config.url.c_str(),config.url.size()+1);
+  memcpy(telemetryToken,config.token.c_str(),config.token.size()+1);
+  return true;
 }
 
-static void telemetryForget() {
-  Preferences p;p.begin(RT_TELEMETRY_NS,false);p.clear();p.end();
-  Serial.println("Telemetry: relay settings cleared; the feed stops after a reboot");
+static void telemetrySetEnabled(bool enabled) {
+  Preferences p;p.begin(RT_TELEMETRY_NS,false);p.clear();p.putBool("disabled",!enabled);p.end();
+  Serial.printf("Telemetry: %s after restart (runtime key file is preserved)\n",enabled?"enabled":"disabled");
 }
 
 static constexpr size_t RT_MANIFEST_CAP = 300000;

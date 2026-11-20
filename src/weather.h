@@ -12,7 +12,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
-#include "wifi_config.h"
+#include "network_settings.h"
 
 enum WeatherCondition : uint8_t {
   WEATHER_SUNNY = 0,

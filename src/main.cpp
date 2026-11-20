@@ -14,7 +14,7 @@
 
 #include "common.h"
 #include "version.h"
-#include "wifi_config.h"
+#include "network_settings.h"
 #include "ui.h"
 #include "telemetry.h"
 
@@ -130,7 +130,8 @@ static void handleSerialCmd(char* s) {
   }
   else if (!strcmp(tok[0], "speed")) { simSpeed = clampi(nt > 1 ? a1 : 1, 1, 16); Serial.printf("Speed: %dx\n", simSpeed); }
   else if (!strcmp(tok[0], "telemetry")) {
-    if (nt > 1 && !strcmp(tok[1], "off")) telemetryForget();
+    if (nt > 1 && !strcmp(tok[1], "off")) telemetrySetEnabled(false);
+    else if (nt > 1 && !strcmp(tok[1], "on")) telemetrySetEnabled(true);
     else Serial.printf("Telemetry: %s\n", telemetryReady ? "publishing" : "off");
   }
   else if (!strcmp(tok[0], "shower")) {
