@@ -10,6 +10,7 @@ import { isOnboard, updateOnboard } from './onboard.js';
 import { DriverLabels } from './driver-labels.js';
 import { WeatherEffects } from './weather-effects.js';
 import { Atmosphere } from './atmosphere.js';
+import { CameraInput } from './camera-input.js';
 
 const v3 = (x,y,z) => new THREE.Vector3(x,y,z);
 const clamp = THREE.MathUtils.clamp;
@@ -55,10 +56,12 @@ export class RaceScene {
     this.scene.add(this.sun,this.sun.target);
     this.orbit=new OrbitControls(this.camera,canvas);this.orbit.enabled=false;this.orbit.enableDamping=true;this.orbit.minDistance=35;this.orbit.maxDistance=1600;this.orbit.maxPolarAngle=Math.PI*.48;
     this.mode='stands';this.row=1;this.standIndex=0;this.follow=-1;this.yaw=0;this.pitch=0;this.fov=60;this.models=new Map();this.poseById=new Map();this.tvCamera=new TVCamera();
-    canvas.addEventListener('pointerdown',e=>{if(e.button!==0||!e.isPrimary)return;this.pointer={id:e.pointerId,x:e.clientX,y:e.clientY,moved:0};if(this.mode!=='stands'&&!this.canOrbitTV()&&!this.isOnboard())return;this.drag={id:e.pointerId,x:e.clientX,y:e.clientY,tv:this.canOrbitTV()};canvas.setPointerCapture(e.pointerId);});
-    canvas.addEventListener('pointermove',e=>{if(this.pointer?.id===e.pointerId)this.pointer.moved=Math.max(this.pointer.moved,Math.hypot(e.clientX-this.pointer.x,e.clientY-this.pointer.y));if(!this.drag||this.drag.id!==e.pointerId)return;const dx=e.clientX-this.drag.x,dy=e.clientY-this.drag.y;if(this.drag.tv)this.tvCamera.orbitBy(dx,dy);else{this.yaw-=dx*.004;this.pitch=clamp(this.pitch+dy*.003,-.65,.65);if(this.isOnboard())this.yaw=clamp(this.yaw,-1.3,1.3);else{this.follow=-1;this.onFreeLook?.();}}this.drag.x=e.clientX;this.drag.y=e.clientY;});
-    canvas.addEventListener('pointerup',e=>{if(this.pointer?.id===e.pointerId&&this.pointer.moved<6)this.pickCar(e.clientX,e.clientY);this.drag=null;this.pointer=null;});canvas.addEventListener('pointercancel',()=>{this.drag=null;this.pointer=null;});
-    canvas.addEventListener('wheel',e=>{if(this.mode==='overview')return;e.preventDefault();if(this.canOrbitTV())this.tvCamera.zoomBy(e.deltaY);else this.fov=clamp(this.fov+e.deltaY*.025,30,85);},{passive:false});
+    const zoom=delta=>{if(this.canOrbitTV())this.tvCamera.zoomBy(delta);else this.fov=clamp(this.fov+delta*.025,30,85);};
+    this.input=new CameraInput(canvas,{pick:(x,y)=>this.pickCar(x,y),zoom,customZoom:()=>this.mode!=='overview',drag:(dx,dy)=>{
+      if(this.canOrbitTV())this.tvCamera.orbitBy(dx,dy);
+      else if(this.mode==='stands'||this.isOnboard()){this.yaw-=dx*.004;this.pitch=clamp(this.pitch+dy*.003,-.65,.65);if(this.isOnboard())this.yaw=clamp(this.yaw,-1.3,1.3);else{this.follow=-1;this.onFreeLook?.();}}
+    }});
+    canvas.addEventListener('wheel',e=>{if(this.mode==='overview')return;e.preventDefault();zoom(e.deltaY);},{passive:false});
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();this.onError?.('The 3D graphics context was interrupted. Reload this page to resume.');});
     window.addEventListener('resize',()=>this.resize());this.resize();
   }
@@ -69,7 +72,7 @@ export class RaceScene {
     this.clear();this.world=null;this.track=null;this.manifest=null;this.frame=null;
     this.poseById.clear();this.rosterById=null;this.labels=null;this.weatherEffects=null;this.atmosphere=null;
     this.director=null;this.tvShot=null;this.tvCamera.reset();this.mode='stands';this.follow=-1;
-    this.drag=null;this.pointer=null;this.orbit.enabled=false;this.renderer.clear();
+    this.input.reset();this.orbit.enabled=false;this.renderer.clear();
   }
   load(manifest){
     this.clear();this.track=manifest.track;this.manifest=manifest;this.world=new THREE.Group();this.scene.add(this.world);this.instances=new Instances(this.world);
@@ -177,7 +180,7 @@ export class RaceScene {
       else for(let k=0;k<3;k++)this.instances.add('tree',[0x365e49,0x47694b,0x577751][k],x,h*(.4+k*.22),z,h*(.55-k*.12),h*.52,h*(.55-k*.12));
     }
   }
-  selectMode(mode){this.mode=mode;this.drag=null;this.orbit.enabled=mode==='overview';this.resetView();if(mode==='overview'){this.camera.position.copy(this.center).add(v3(280,640,510));this.orbit.target.copy(this.center);this.orbit.update();}}
+  selectMode(mode){this.mode=mode;this.input.reset();this.orbit.enabled=mode==='overview';this.resetView();if(mode==='overview'){this.camera.position.copy(this.center).add(v3(280,640,510));this.orbit.target.copy(this.center);this.orbit.update();}}
   resetView(){this.yaw=0;this.pitch=0;this.fov=60;this.follow=-1;this.tvCamera.reset();}
   setTV(mode,driver,angle){this.director?.configure(mode,driver,angle);this.resetView();}
   isOnboard(){return this.mode==='tv'&&isOnboard(this.director?.angle);}

@@ -5,6 +5,22 @@ This is the maintained copy of the spectator app, including the refined
 motorcycle/go-kart models, onboard cameras, TV director, clickable drivers,
 weather, grandstands and vehicle lighting. No audio is included.
 
+## Watching on a phone
+
+The race opens in Auto TV. Use **Camera** for one-tap leader/onboard views,
+grandstand seats or the whole circuit. **Drivers** shows the complete race
+order; choosing a driver returns directly to the race. **More** contains names,
+effects, supported fullscreen controls, connection settings and the explicit
+offline demo. Tap the current source tab or use Return to live to leave a demo.
+
+Drag to look around and pinch to zoom. Overview uses the usual orbit gestures.
+Camera and timing controls open in native modal sheets on phones, portrait
+tablets and short landscape windows. Desktop keeps the side panels. Results
+and starting grids open on request rather than interrupting the view.
+
+The mobile update only requires deploying the spectator release. Existing Pi
+and ESP32 publishers keep their URLs and credentials; no device update is needed.
+
 ## Release deployment
 
 Use `race-track-spectator.tar.gz` from a tagged
